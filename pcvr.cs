@@ -11,7 +11,7 @@ namespace OpenCameraCSByOpenCV
         CSampleGrabberCB m_CamCB = null;
         public void createCamera()
         {
-            m_CamCB = new CSampleGrabberCB(0, 15, 320, 240, "c:\\Logo.avi");
+            m_CamCB = new CSampleGrabberCB(0);
             m_CamCB.Start();
             //PlayCapRectify playCap = new PlayCapRectify();
             //playCap.CaptureVideo();

@@ -6,6 +6,8 @@ using System.Drawing;
 using OpenCvSharp;
 using DirectShowLib;
 using System.Runtime.InteropServices;
+using System.Windows.Forms;
+using System.Runtime.InteropServices.ComTypes;
 
 namespace OpenCameraCSByOpenCV
 {
@@ -28,7 +30,7 @@ namespace OpenCameraCSByOpenCV
         #endregion
 
         /// zero based device index, and some device parms, plus the file name to save to
-        public CSampleGrabberCB(int iDeviceNum, int iFrameRate, int iWidth, int iHeight, string FileName)
+        public CSampleGrabberCB(int iDeviceNum)
         {
             DsDevice[] capDevices;
             // Get the collection of video devices
@@ -38,10 +40,15 @@ namespace OpenCameraCSByOpenCV
                 throw new Exception("No video capture devices found at that index!");
             }
 
+            if (!CheckCameraIdInfo(capDevices[iDeviceNum]))
+            {
+                return;
+            }
+
             try
             {
                 // Set up the capture graph
-                SetupGraph( capDevices[iDeviceNum], iFrameRate, iWidth, iHeight, FileName);
+                SetupGraph(capDevices[iDeviceNum]);
             }
             catch
             {
@@ -60,6 +67,11 @@ namespace OpenCameraCSByOpenCV
         ~CSampleGrabberCB()
         {
             CloseInterfaces();
+        }
+
+        void Msg(string str)
+        {
+            MessageBox.Show(str);
         }
 
         /// <summary> capture the next image </summary>
@@ -87,7 +99,7 @@ namespace OpenCameraCSByOpenCV
         }
 
         /// <summary> build the capture graph for grabber. </summary>
-        private void SetupGraph(DsDevice dev, int iFrameRate, int iWidth, int iHeight, string FileName)
+        private void SetupGraph(DsDevice dev)
         {
             int hr = -1;
             ISampleGrabber sampGrabber = null;
@@ -156,6 +168,23 @@ namespace OpenCameraCSByOpenCV
                     sampGrabber = null;
                 }
             }
+        }
+
+        bool CheckCameraIdInfo(DsDevice dev)
+        {
+            bool isFindCamera = false;
+            string pDisplayName = "";
+            dev.Mon.GetDisplayName(null, null, out pDisplayName);
+            if (pDisplayName.Contains("vid_04fc") &&
+                (pDisplayName.Contains("pid_fa02") || pDisplayName.Contains("pid_fa09")))
+            {
+                isFindCamera = true;
+            }
+            else
+            {
+                Msg("Camera vid or pid error!");
+            }
+            return isFindCamera;
         }
 
         /// <summary> Read and store the properties </summary>
