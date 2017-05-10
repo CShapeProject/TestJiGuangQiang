@@ -25,32 +25,14 @@ namespace OpenCameraCSByOpenCV
         private int m_videoWidth;
         private int m_videoHeight;
         private int m_stride;
-
-        //BitmapData m_bmdLogo = null;
-        //Bitmap m_Bitmap = null;
-
-//#if DEBUG
-//        // Allow you to "Connect to remote graph" from GraphEdit
-//        DsROTEntry m_rot = null;
-//#endif
-
-        #endregion
-
-        #region API
-
-        [DllImport("Kernel32.dll", EntryPoint="RtlMoveMemory")]
-        private static extern void CopyMemory(IntPtr Destination, IntPtr Source, [MarshalAs(UnmanagedType.U4)] uint Length);
-
         #endregion
 
         /// zero based device index, and some device parms, plus the file name to save to
         public CSampleGrabberCB(int iDeviceNum, int iFrameRate, int iWidth, int iHeight, string FileName)
         {
             DsDevice[] capDevices;
-
             // Get the collection of video devices
             capDevices = DsDevice.GetDevicesOfCat(FilterCategory.VideoInputDevice);
-
             if (iDeviceNum + 1 > capDevices.Length)
             {
                 throw new Exception("No video capture devices found at that index!");
@@ -72,12 +54,6 @@ namespace OpenCameraCSByOpenCV
         public void Dispose()
         {
             CloseInterfaces();
-            //if (m_Bitmap != null)
-            //{
-            //    m_Bitmap.UnlockBits(m_bmdLogo);
-            //    m_Bitmap = null;
-            //    m_bmdLogo = null;
-            //}
         }
 
         // Destructor
@@ -93,7 +69,6 @@ namespace OpenCameraCSByOpenCV
             {
                 int hr = m_mediaCtrl.Run();
                 DsError.ThrowExceptionForHR( hr );
-
                 m_bRunning = true;
             }
         }
@@ -107,40 +82,14 @@ namespace OpenCameraCSByOpenCV
             {
                 int hr = m_mediaCtrl.Pause();
                 DsError.ThrowExceptionForHR( hr );
-
                 m_bRunning = false;
-            }
-        }
-
-        /// <summary> Specify the logo file to write onto each frame </summary>
-        public void SetLogo(string fileName)
-        {
-            lock (this)
-            {
-                //if (fileName.Length > 0)
-                //{
-                //    m_Bitmap = new Bitmap(fileName);
-
-                //    Rectangle r = new Rectangle(0, 0, m_Bitmap.Width, m_Bitmap.Height);
-                //    m_bmdLogo = m_Bitmap.LockBits(r, ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
-                //}
-                //else
-                //{
-                //    if (m_Bitmap != null)
-                //    {
-                //        m_Bitmap.UnlockBits(m_bmdLogo);
-
-                //        m_Bitmap = null;
-                //        m_bmdLogo = null;
-                //    }
-                //}
             }
         }
 
         /// <summary> build the capture graph for grabber. </summary>
         private void SetupGraph(DsDevice dev, int iFrameRate, int iWidth, int iHeight, string FileName)
         {
-            int hr;
+            int hr = -1;
             ISampleGrabber sampGrabber = null;
             IBaseFilter baseGrabFlt = null;
             IBaseFilter capFilter = null;
@@ -151,10 +100,6 @@ namespace OpenCameraCSByOpenCV
             // Get the graphbuilder object
             m_FilterGraph = new FilterGraph() as IFilterGraph2;
             m_mediaCtrl = m_FilterGraph as IMediaControl;
-
-//#if DEBUG
-//            m_rot = new DsROTEntry(m_FilterGraph);
-//#endif
             try
             {
                 // Get the ICaptureGraphBuilder2
@@ -178,18 +123,10 @@ namespace OpenCameraCSByOpenCV
                 hr = m_FilterGraph.AddFilter( baseGrabFlt, "Ds.NET Grabber" );
                 DsError.ThrowExceptionForHR( hr );
 
-                // If any of the default config items are set
-                if (iFrameRate + iHeight + iWidth > 0)
-                {
-                    SetConfigParms(capGraph, capFilter, iFrameRate, iWidth, iHeight);
-                }
-
-                // Create a filter for the output avi file
-                //hr = capGraph.SetOutputFileName(MediaSubType.Avi, FileName, out muxFilter, out fileWriterFilter);
-                //DsError.ThrowExceptionForHR( hr );
-
                 // Connect everything together
+                //开始渲染采集器的图像,但是不打开渲染窗口"ActiveMovie".
                 hr = capGraph.RenderStream(PinCategory.Capture, MediaType.Video, capFilter, null, baseGrabFlt);
+                //开始渲染采集器的图像,并且打开渲染窗口"ActiveMovie".
                 //hr = capGraph.RenderStream(PinCategory.Capture, MediaType.Video, capFilter, baseGrabFlt, muxFilter);
                 DsError.ThrowExceptionForHR(hr);
 
@@ -224,8 +161,7 @@ namespace OpenCameraCSByOpenCV
         /// <summary> Read and store the properties </summary>
         private void SaveSizeInfo(ISampleGrabber sampGrabber)
         {
-            int hr;
-
+            int hr = -1;
             // Get the media type from the SampleGrabber
             AMMediaType media = new AMMediaType();
             hr = sampGrabber.GetConnectedMediaType( media );
@@ -249,7 +185,7 @@ namespace OpenCameraCSByOpenCV
         /// <summary> Set the options on the sample grabber </summary>
         private void ConfigureSampleGrabber(ISampleGrabber sampGrabber)
         {
-            int hr;
+            int hr = -1;
             AMMediaType media = new AMMediaType();
 
             // Set the media type to Video/RBG24
@@ -262,96 +198,15 @@ namespace OpenCameraCSByOpenCV
             DsUtils.FreeAMMediaType(media);
             media = null;
 
-            // Configure the samplegrabber callback
+            // Configure the samplegrabber callback.
             hr = sampGrabber.SetCallback( this, 1 );
             DsError.ThrowExceptionForHR( hr );
-        }
-
-        // Set the Framerate, and video size
-        private void SetConfigParms(ICaptureGraphBuilder2 capGraph, IBaseFilter capFilter, int iFrameRate, int iWidth, int iHeight)
-        {
-            int hr;
-            object o;
-            AMMediaType media;
-            IAMStreamConfig videoStreamConfig;
-            IAMVideoControl videoControl = capFilter as IAMVideoControl;
-
-            // Find the stream config interface
-            hr = capGraph.FindInterface(
-                PinCategory.Capture, MediaType.Video, capFilter, typeof(IAMStreamConfig).GUID, out o );
-
-            videoStreamConfig = o as IAMStreamConfig;
-            try
-            {
-                if (videoStreamConfig == null)
-                {
-                    throw new Exception("Failed to get IAMStreamConfig");
-                }
-
-                hr = videoStreamConfig.GetFormat(out media);
-                DsError.ThrowExceptionForHR( hr );
-
-                // copy out the videoinfoheader
-                VideoInfoHeader v = new VideoInfoHeader();
-                Marshal.PtrToStructure( media.formatPtr, v );
-
-                // if overriding the framerate, set the frame rate
-                if (iFrameRate > 0)
-                {
-                    v.AvgTimePerFrame = 10000000 / iFrameRate;
-                }
-
-                // if overriding the width, set the width
-                if (iWidth > 0)
-                {
-                    v.BmiHeader.Width = iWidth;
-                }
-
-                // if overriding the Height, set the Height
-                if (iHeight > 0)
-                {
-                    v.BmiHeader.Height = iHeight;
-                }
-
-                // Copy the media structure back
-                Marshal.StructureToPtr( v, media.formatPtr, false );
-
-                // Set the new format
-                hr = videoStreamConfig.SetFormat( media );
-                DsError.ThrowExceptionForHR( hr );
-
-                DsUtils.FreeAMMediaType(media);
-                media = null;
-
-                // Fix upsidedown video
-                if (videoControl != null)
-                {
-                    VideoControlFlags pCapsFlags;
-
-                    IPin pPin = DsFindPin.ByCategory(capFilter, PinCategory.Capture, 0);
-                    hr = videoControl.GetCaps(pPin, out pCapsFlags);
-                    DsError.ThrowExceptionForHR( hr );
-
-                    if ((pCapsFlags & VideoControlFlags.FlipVertical) > 0)
-                    {
-                        hr = videoControl.GetMode(pPin, out pCapsFlags);
-                        DsError.ThrowExceptionForHR( hr );
-
-                        hr = videoControl.SetMode(pPin, 0);
-                    }
-                }
-            }
-            finally
-            {
-                Marshal.ReleaseComObject(videoStreamConfig);
-            }
         }
 
         /// <summary> Shut down capture </summary>
         private void CloseInterfaces()
         {
-            int hr;
-
+            int hr = -1;
             try
             {
                 if( m_mediaCtrl != null )
@@ -364,15 +219,8 @@ namespace OpenCameraCSByOpenCV
             }
             catch (Exception ex)
             {
-                //Debug.WriteLine(ex);
+                Console.WriteLine(ex);
             }
-
-//#if DEBUG
-//            if (m_rot != null)
-//            {
-//                m_rot.Dispose();
-//            }
-//#endif
 
             if (m_FilterGraph != null)
             {
@@ -396,6 +244,7 @@ namespace OpenCameraCSByOpenCV
             double dTime = SampleTime - LastTimeVal;
             LastTimeVal = SampleTime;
             Console.WriteLine("dTime " + dTime);
+
             return 0;
         }
 
