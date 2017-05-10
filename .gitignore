@@ -1,0 +1,9 @@
+/bin
+/obj
+/Properties
+*.dll
+*.resx
+*.csproj
+*.user
+*.sln
+*.suo
