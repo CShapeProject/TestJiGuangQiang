@@ -3,19 +3,24 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Drawing;
-using OpenCvSharp;
-using DirectShowLib;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using System.Runtime.InteropServices.ComTypes;
 
+using DirectShowLib;
+
 namespace OpenCameraCSByOpenCV
 {
+    public enum MODE
+    {
+        MODE_SET_CALIBRATION,
+        MODE_MOTION,
+    };
+
     //typedef void (__stdcall ashPINTPROC)(Point);
     class CSampleGrabberCB : ISampleGrabberCB
     {
         #region Member variables
-
         /// <summary> graph builder interface. </summary>
         private IFilterGraph2 m_FilterGraph = null;
         IMediaControl m_mediaCtrl = null;
@@ -27,11 +32,14 @@ namespace OpenCameraCSByOpenCV
         private int m_videoWidth;
         private int m_videoHeight;
         private int m_stride;
+        private int m_CamID;
         #endregion
 
         /// zero based device index, and some device parms, plus the file name to save to
         public CSampleGrabberCB(int iDeviceNum)
         {
+            InitFindPlayerPoint();
+
             DsDevice[] capDevices;
             // Get the collection of video devices
             capDevices = DsDevice.GetDevicesOfCat(FilterCategory.VideoInputDevice);
@@ -39,6 +47,7 @@ namespace OpenCameraCSByOpenCV
             {
                 throw new Exception("No video capture devices found at that index!");
             }
+            m_CamID = iDeviceNum;
 
             if (!CheckCameraIdInfo(capDevices[iDeviceNum]))
             {
@@ -202,10 +211,27 @@ namespace OpenCameraCSByOpenCV
             }
 
             // Grab the size info
-            VideoInfoHeader videoInfoHeader = (VideoInfoHeader) Marshal.PtrToStructure( media.formatPtr, typeof(VideoInfoHeader) );
+            VideoInfoHeader videoInfoHeader = (VideoInfoHeader) Marshal.PtrToStructure( media.formatPtr,
+                                                                         typeof(VideoInfoHeader) );
             m_videoWidth = videoInfoHeader.BmiHeader.Width;
             m_videoHeight = videoInfoHeader.BmiHeader.Height;
             m_stride = m_videoWidth * (videoInfoHeader.BmiHeader.BitCount / 8);
+
+            Width = videoInfoHeader.BmiHeader.Width;
+            Height = videoInfoHeader.BmiHeader.Height;
+            GrayValues = new byte[Width * Height];
+            unwantedPoint = new Point[Width * Height];
+
+            //CvSize size = new CvSize(Width, Height);
+            //IplImage img1 = new IplImage(size, BitDepth.U8, 1); 
+            //IplImage imgTmp = new IplImage(Cv.Size(Width, Height), BitDepth.U8, 1);
+            //image = new IplImage(Width, Height, BitDepth.U8, 1);
+            //image.InitImageHeader(Cv.Size(Width, Height), BitDepth.U8, 1, ImageOrigin.BottomLeft);
+            //image = IplImage.InitImageHeader(Cv.Size(Width, Height), BitDepth.U8, 1, ImageOrigin.BottomLeft);
+            //image = Cv.CreateImage(Cv.Size(Width, Height), BitDepth.U8, 1);
+            //Cv.InitImageHeader(out IplImage image, CvSize size, BitDepth depth, int channels, ImageOrigin origin);
+            //image.Origin = ImageOrigin.BottomLeft;
+            //Cv.InitImageHeader(out image, Cv.Size(Width, Height), BitDepth.U8, 1, ImageOrigin.BottomLeft);
 
             DsUtils.FreeAMMediaType(media);
             media = null;
@@ -256,6 +282,12 @@ namespace OpenCameraCSByOpenCV
                 Marshal.ReleaseComObject(m_FilterGraph);
                 m_FilterGraph = null;
             }
+
+            //if (image != null)
+            //{
+            //    Cv.ReleaseImage(image);
+            //    image = null;
+            //}
             GC.Collect();
         }
 
@@ -268,591 +300,511 @@ namespace OpenCameraCSByOpenCV
 
         double LastTimeVal = 0;
         /// <summary> buffer callback, COULD BE FROM FOREIGN THREAD. </summary>
-        int ISampleGrabberCB.BufferCB(double SampleTime, IntPtr pBuffer, int BufferLen)
+        unsafe int ISampleGrabberCB.BufferCB(double sampleTime, IntPtr pBuffer, int bufferLen)
         {
-            double dTime = SampleTime - LastTimeVal;
-            LastTimeVal = SampleTime;
+            double dTime = sampleTime - LastTimeVal;
+            LastTimeVal = sampleTime;
             Console.WriteLine("dTime " + dTime);
 
+            CheckBufferCB(pBuffer, bufferLen);
             return 0;
         }
 
-//        uint _ID;
-//        int m_nMoveRadius;	
+        #region Find Player Cross Point
+        int m_nMoveRadius;
+        //采集器输出图像的大小信息.
+        public int Width;
+        public int Height;
 
-//        public int Width;
-//        public int Height;
+        //显示器的大小信息.
+        int lClientWidth;
+        int lClientHeight;
+        //定义转化为灰度后需要存储的数组. 
+        byte[] GrayValues;
+        int m_nBrightDotCount;
+        int m_nSmoothingCount;
 
-//        long lClientWidth;
-//        long lClientHeight;
+        float m_fMark;
+        float m_fExsmothX, m_fExsmothY;
 
-//        int m_nBrightDotCount;
-//        int m_nSmoothPoints, m_nSmoothingCount;
+        public MODE m_mode;
+        //激光器枪在显示器上投射的坐标信息.
+        Point m_curMousePoint;
+        //存储显示器四个角在采集器图像里的坐标信息.
+        Point[] m_p4 = new Point[4];
 
-//        float[] m_fSmoothingX = new float[20];
-//        float[] m_fSmoothingY = new float[20];
+        public Warper m_warp;
+        bool g_bBeginDrawRectangle;
+        bool m_bFirstInst;
 
-//        bool m_bSmoothState;
+        //校准光枪第几个点信息.
+        int m_nLed;
+        //用于校准光枪坐标.
+        bool m_bRectifyState;
+        bool m_bCurPointModified;
 
-//        float m_fMark;
-//        float m_fExsmothX, m_fExsmothY;
+        //76800 = 320 * 240; -> 采集器像素的宽*高.
+        Point[] unwantedPoint;
+        long unwantedPointNum;
+        int getFrameNum;
 
-//        Point m_curMousePoint;
+        const int SM_CXSCREEN = 0;
+        const int SM_CYSCREEN = 1;
 
-//        long m_lTickCount;
+        #region API函数声明开始.
+        [DllImport("kernel32")]//返回0表示失败，非0为成功
+        private static extern int WritePrivateProfileStruct(string lpszSections,
+            string lpszKey, byte[] lpStruct, int uSizeStruct, string szFile);
 
-//        bool m_bSwitch;
+        [DllImport("kernel32")]//返回取得字符串缓冲区的长度
+        private static extern int GetPrivateProfileStruct(string lpszSections,
+            string lpszKey, byte[] lpStruct, int uSizeStruct, string szFile);
 
-//        public MODE m_mode;
+        [DllImport("user32")]
+        static extern bool GetWindowRect(IntPtr hWnd, ref Rectangle rect);
+        //static extern bool GetWindowRect(IntPtr hWnd, ref CvRect rect);
+        [DllImport("user32")]
+        static extern IntPtr GetDesktopWindow();
+        [DllImport("user32")]
+        static extern int GetSystemMetrics(int nIndex);
+        #endregion API函数声明结束.
 
-//        long m_lLastFrameNumber;
+        void InitFindPlayerPoint()
+        {
+            Width = 0;
+            Height = 0;
+            lClientWidth = GetSystemMetrics(SM_CXSCREEN);
+            lClientHeight = GetSystemMetrics(SM_CYSCREEN);
+            m_nBrightDotCount = 0;
+            m_curMousePoint.X = -1;
+            m_curMousePoint.Y = -1;
 
-//        long m_lFps;
+            ResetMP4Info();
+            m_warp = new Warper();
+            m_mode = MODE.MODE_MOTION;
 
-//        Point m_pointMouseDown;
-//        Point m_pointMouseMove;
+            m_bCurPointModified = false;
+            m_nMoveRadius = 0;
 
-//        Point m_pointLight, m_pointLight1;
+            ResetRectify();
+            ResetSmoothing();
+            InitRectifyCfg();
 
-//        Point[] m_p4 = new Point[4];
+            m_bFirstInst = false;
+            unwantedPointNum = 0;
+            getFrameNum = 0;
+        }
 
-//        bool m_bYellowCon;
-//        int m_nYellowIndex;
+        void InitRectifyCfg()
+        {
+            int rv = -1;
+            Rectangle rc = new Rectangle();
+            GetWindowRect(GetDesktopWindow(), ref rc);
+            /************************************************************************/
+            /* cvSrcBt[0] -> x高字节,cvSrcBt[1] -> x低字节.                         */
+            /* cvSrcBt[2] -> y高字节,cvSrcBt[3] -> y低字节.                         */
+            /************************************************************************/
+            byte[] cvSrcBt = new byte[4];
+            string szwcKey = "";
+            string strTitle = "Camera" + m_CamID;
 
-//        CvMat m_translate;
+            for (int i = 0; i < 4; i++)
+            {
+                szwcKey = "DataSrc" + i;
+                rv = GetPrivateProfileStruct(strTitle, szwcKey, cvSrcBt, cvSrcBt.Length, ".//Rectangle.vro");
+                if (rv == 1)
+                {
+                    m_p4[i].X = (cvSrcBt[0] << 8) + cvSrcBt[1];
+                    m_p4[i].Y = (cvSrcBt[2] << 8) + cvSrcBt[3];
+                }
 
-//        bool m_bConform;
+                if (rv != 1 || m_p4[i].X > rc.Right - rc.Left || m_p4[i].Y > rc.Bottom - rc.Top)
+                {
+                    ResetMP4Info();
+                    break;
+                }
+            }
+        }
 
-//        Warper m_warp;
+        void ResetMP4Info()
+        {
+            m_p4[0].X = 20;
+            m_p4[0].Y = 20;
+            m_p4[1].X = 60;
+            m_p4[1].Y = 20;
+            m_p4[2].X = 60;
+            m_p4[2].Y = 60;
+            m_p4[3].X = 20;
+            m_p4[3].Y = 60;
+        }
 
-//        public IplImage image;
+        void ResetRectify()
+        {
+            g_bBeginDrawRectangle = false;
+            m_bRectifyState = false;
+            m_nLed = -1;
+        }
 
-//        bool g_bBeginDrawRectangle;
+        unsafe void getUnwantedPoint(byte* pBuffer)
+        {
+            byte fGray = 0;
+            unwantedPointNum = 0;
+            for (int y = 0; y < Height; y++)
+            {
+                for (int x = 0; x < Width * 3; x += 3)
+                {
+                    //Gray = (R*299 + G*587 + B*114 + 500) / 1000; //整数运算效率高于浮点运算.
+                    /*fGray = ( float )( 299 * pBuffer[ x + 2 + Width * 3 * y ] + 
+                            587 * pBuffer[ x + 1 + Width * 3 * y ] +				
+                            114 * pBuffer[ x + 0 + Width * 3 * y ] ) / 1000.0;*/
+                    //Gray = (R*19595 + G*38469 + B*7472) >> 16; //移位法效率更高.
+                    fGray = (byte)((pBuffer[x + 2 + Width * 3 * y] * 19595
+                                                    + pBuffer[x + 1 + Width * 3 * y] * 38469
+                                                    + pBuffer[x + 0 + Width * 3 * y] * 7472) >> 16);
 
-//        bool g_bled;
-
-//        int m_nFirstInst;
-
-//        int m_nLed;
-
-//        int m_bRectifyState;
-//        bool m_bCurPointModified;
-
-//        int m_nLightcount, m_ncount, m_nPointToConvert;
-//        int m_ntempled;
-
-//        bool b_getUnwantedLightSource;
-//        Point[] unwantedPoint = new Point[76800];
-//        long unwantedPointNum;
-//        int getFrameNum;
-
-//        const int SM_CXSCREEN = 0;
-//        const int SM_CYSCREEN = 1;
-//        [DllImport("user32")]
-//        static extern bool GetWindowRect(IntPtr hWnd, ref CvRect rect);
-//        [DllImport("user32")]
-//        static extern IntPtr GetDesktopWindow();
-//        [DllImport("user32")]
-//        static extern int GetSystemMetrics(int nIndex);
-
-//        //public int SampleCB(double SampleTime, IMediaSample pSample)
-//        /// <summary> sample callback, NOT USED. </summary>
-//        int ISampleGrabberCB.SampleCB(double SampleTime, IMediaSample pSample)
-//        {
-//            return 0;
-//        }
+                    if (fGray > /*m_nGrayThreshold*/200)
+                    {
+                        //记录干扰光源坐标信息.
+                        unwantedPoint[unwantedPointNum].X = x;
+                        unwantedPoint[unwantedPointNum].Y = y;
+                        unwantedPointNum++;
+                    }
+                }
+            }
+        }
         
-//        public CSampleGrabberCB(uint camid)
-//        {
-//            _ID = camid;
-//            Width = 0;
-//            Height = 0;
-//            lClientWidth = GetSystemMetrics(SM_CXSCREEN);
-//            lClientHeight = GetSystemMetrics(SM_CYSCREEN);
-//            m_nBrightDotCount = 0;
-//            m_curMousePoint.X = -1;
-//            m_curMousePoint.Y = -1;
+        unsafe void subUnWantedPoint(byte* pBuffer, int buferSize)
+        {
+            if (unwantedPointNum == 0)
+            {
+                return;
+            }
 
-//            m_mode = MODE.MODE_SET_CALIBRATION;
-//            m_bSwitch = false;
-//            m_lTickCount = 0;
-//            m_lLastFrameNumber = 0;
-//            m_lFps = 0;
-//            m_ncount = 0;
-//            m_nPointToConvert = 0;
+            for (int index = 0; index < unwantedPointNum; index++)
+            {
+                int x = unwantedPoint[index].X;
+                int y = unwantedPoint[index].Y;
+                if ((x + 2 + Width * y * 3) >= buferSize)
+                {
+                    return;
+                }
+                //将RGB设置为零,起到屏蔽干扰光源的目的.
+                pBuffer[x + 2 + Width * y * 3] = 0;
+                pBuffer[x + 1 + Width * y * 3] = 0;
+                pBuffer[x + 0 + Width * y * 3] = 0;
+            }
+        }
 
-//            m_bCurPointModified = false;
-//            m_nMoveRadius = 0;
-//            //ZeroMemory( m_p4, sizeof( m_p4 ) );
+        unsafe int CheckBufferCB(IntPtr pBuffer, int bufferLen)
+        {
+            getFrameNum++;
+            if (getFrameNum == 9000)
+            {
+                getUnwantedPoint((byte*)pBuffer);
+                getFrameNum = 0;
+                return 0;
+            }
 
-//            ResetRectify();
-//            ResetSmoothing();
-//            InitRectifyCfg();
+            if (unwantedPointNum > 0)
+            {
+                subUnWantedPoint((byte*)pBuffer, bufferLen);
+            }
 
-//            m_nFirstInst = 0;
-//            b_getUnwantedLightSource = false;
-//            //ZeroMemory( unwantedPoint, sizeof( unwantedPoint ) );
-//            unwantedPointNum = 0;
-//            getFrameNum = 0;
-//        }
+            switch (m_mode)
+            {
+                case MODE.MODE_SET_CALIBRATION:
+                    if (g_bBeginDrawRectangle)
+                    {
+                        if (m_bRectifyState)
+                        {
+                            int nled = m_nLed;
+                            Point pointVal =  GetPointToConvert((byte*)pBuffer);
+                            //Con::printf("nled %d, m_nled %d",nled, m_nLed);
 
-//        void InitRectifyCfg()
-//        {
-//            CvPoint2D32f[] cvsrc = new CvPoint2D32f[4];
-//            string szwcKey;
-//            string strTitle = "Camera1";
-//            bool bRet = false;
-//            CvRect rc = new CvRect();
-//            //ZeroMemory(szwcKey, sizeof(szwcKey));
-//            //ZeroMemory(strTitle, sizeof(strTitle));
-//            for( int i = 0; i < 4; i++ )
-//            {
-//                szwcKey = "DataSrc"+i;
-//                //bRet = GetPrivateProfileStruct(strTitle, szwcKey, ( LPVOID )&cvsrc[ i ],
-//                //            sizeof( CvPoint2D32f ), L".//Rectangle.vro" );
-//                if ( !bRet )
-//                {
-//                    m_p4[ 0 ].X = 20;
-//                    m_p4[ 0 ].Y = 20;
-//                    m_p4[ 1 ].X = 60;
-//                    m_p4[ 1 ].Y = 20;
-//                    m_p4[ 2 ].X = 60;
-//                    m_p4[ 2 ].Y = 60;
-//                    m_p4[ 3 ].X = 20;
-//                    m_p4[ 3 ].Y = 60;
-//                    break;
-//                }
+                            //find pointJiGuangQi
+                            if (nled != m_nLed)
+                            {
+                                if (m_nLed > 3)
+                                {
+                                    m_bRectifyState = false;
+                                }
+                                else
+                                {
+                                    m_p4[3 - m_nLed].X = pointVal.X;
+                                    m_p4[3 - m_nLed].Y = pointVal.Y;
+                                    m_bRectifyState = false;
+                                }
+                                //添加代码,改变校准图片信息.
+                                //Con::executef("onChangeCalibration",  Con::getIntArg(m_nLed));
+                            }
+                        }
 
-//                //GetWindowRect( GetDesktopWindow(), &rc );
-//                if( m_p4[ i ].X > rc.Right - rc.Left || m_p4[ i ].Y > rc.Bottom - rc.Top)
-//                {
-//                    m_p4[ 0 ].X = 20;
-//                    m_p4[ 0 ].Y = 20;
-//                    m_p4[ 1 ].X = 60;
-//                    m_p4[ 1 ].Y = 20;
-//                    m_p4[ 2 ].X = 60;
-//                    m_p4[ 2 ].Y = 60;
-//                    m_p4[ 3 ].X = 20;
-//                    m_p4[ 3 ].Y = 60;
-//                    break;
-//                }
-//                else
-//                {
-//                    m_p4[ i ].X = (int)cvsrc[ i ].X;
-//                    m_p4[ i ].Y = (int)cvsrc[ i ].Y;
-//                }
-//            }
+                        //光枪校准已经完成.
+                        if (3 == m_nLed)
+                        {
+                            g_bBeginDrawRectangle = false;
+                            SetCalibrationInfo();
+                        }
+                    }
+                    break;
 
-//            m_bYellowCon = false;
-//            m_nYellowIndex = -1;
-//            m_bConform = false;
-//            //m_translate = cvCreateMat(3,3,CV_32FC1);
-//        }
+                case MODE.MODE_MOTION:
+                    if (!m_bFirstInst)
+                    {
+                        SetCalibrationInfo();
+                    }
+                    ConvertGrayBitmapFindPoint((byte*)pBuffer);
 
-//        void ResetRectify()
-//        {
-//            m_ntempled = 999;
-//            g_bBeginDrawRectangle = false;
-//            m_bRectifyState = 0;
-//            m_nLed = -1;
-//            m_nPointToConvert = 0;
-//            m_ncount = 0;
-//            g_bled = false;
-//        }
+                    if (m_bCurPointModified)
+                    {
+                        //找到激光器亮点坐标信息.
+                        m_bCurPointModified = false;
 
-//        void getUnwantedPoint( byte[] pBuffer, long BufferSize )
-//        {
-//            float fGray = 0.0f;
-//            unwantedPointNum = 0;
-//            for( int y = 0; y < Height; y++ )
-//            {
-//                for( int x = 0; x < Width * 3; x += 3 )
-//                {
-//                    //Gray = (R*299 + G*587 + B*114 + 500) / 1000; //整数运算效率高于浮点运算.
-//                    /*fGray = ( float )( 299 * pBuffer[ x + 2 + Width * 3 * y ] + 
-//                            587 * pBuffer[ x + 1 + Width * 3 * y ] +				
-//                            114 * pBuffer[ x + 0 + Width * 3 * y ] ) / 1000.0;*/
-//                    //Gray = (R*19595 + G*38469 + B*7472) >> 16; //移位法效率更高.
-//                    fGray = (float)((pBuffer[ x + 2 + Width * 3 * y ] * 19595
-//                                                    + pBuffer[ x + 1 + Width * 3 * y ] * 38469
-//                                                    + pBuffer[ x + 0 + Width * 3 * y ] * 7472) >> 16);	
+                        //改变准星坐标.
+                        /*if(m_funPointProc)
+                        {
+                            if(m_curMousePoint.x < 1 || m_curMousePoint.y < 1)
+                            {
+                                m_curMousePoint.x = 0;
+                                m_curMousePoint.y = 0;
+                            }
+                            m_funPointProc(this->_ID, m_curMousePoint);
+                            //MessageBox(NULL, L"m_funPointProcid", L"OK", MB_OK);
+                        }*/
+                    }
+                    /*else
+                    {
+                        if(m_funPointProc)
+                        {
+                            m_curMousePoint.x = -1;
+                            m_curMousePoint.y = -1;
+                            m_funPointProc(this->_ID, m_curMousePoint);
+                        }
+                    }*/
+                    break;
+                default:
+                    break;
+            }
+            return 0;
+        }
 
-//                    if( fGray > /*m_nGrayThreshold*/200 ) 
-//                    {									
-//                        unwantedPoint[unwantedPointNum].X = x;
-//                        unwantedPoint[unwantedPointNum].Y = y;
-//                        unwantedPointNum++;
-//                    }
-//                }
-//            }
-//        }
+        //设置透视变换类信息.
+        void SetCalibrationInfo()
+        {
+            string szwcKey = "";
+            string strTitle = "Camera"+m_CamID;
+            /************************************************************************/
+            /* cvSrcBt[0] -> x高字节,cvSrcBt[1] -> x低字节.                         */
+            /* cvSrcBt[2] -> y高字节,cvSrcBt[3] -> y低字节.                         */
+            /************************************************************************/
+            byte[] cvSrcBt = new byte[4];
+            Point[] cvsrc = new Point[4]; //采集器点信息.
+            Point[] cvdst = new Point[4]; //显示器屏幕信息.
 
-//        void subUnWantedPoint( byte[] pBuffer, long BuferSize )
-//        {
-//            if ( unwantedPointNum == 0 )
-//            {
-//                return;
-//            }
+            m_bFirstInst = true; //设置透视变换类信息状态.
 
-//            for ( int index = 0; index < unwantedPointNum; index++ )
-//            {
-//                int x = unwantedPoint[ index ].X;
-//                int y = unwantedPoint[ index ].Y;
-//                if ( ( x + 2 + Width * y * 3 ) >= BuferSize )
-//                {
-//                    return;
-//                }
-//                pBuffer[ x + 2 + Width * y * 3 ] = 0;
-//                pBuffer[ x + 1 + Width * y * 3 ] = 0;
-//                pBuffer[ x + 0 + Width * y * 3 ] = 0;
-//            }
-//        }
+            cvdst[0].X = 0;
+            cvdst[0].Y = 0;
+            cvdst[1].X = lClientWidth;
+            cvdst[1].Y = 0;
+            cvdst[2].X = lClientWidth;
+            cvdst[2].Y = lClientHeight;
+            cvdst[3].X = 0;
+            cvdst[3].Y = lClientHeight;
 
-//        //public int BufferCB(double SampleTime, IntPtr pBuffer, int BuferSize)
-//        /// <summary> buffer callback, COULD BE FROM FOREIGN THREAD. </summary>
-//        int ISampleGrabberCB.BufferCB(double SampleTime, IntPtr pBuffer, int BufferLen)
-//        {
-//            return 0;
-//            //getFrameNum++;
-//            //if ( getFrameNum == 9000 )
-//            //{
-//            //    getUnwantedPoint( pBuffer, BuferSize );
-//            //    getFrameNum = 0;
-//            //    return 0;
-//            //}
+            for( int i = 0; i < 4; i++ )
+            {
+                cvsrc[i].X = m_p4[i].X;
+                cvsrc[i].Y = m_p4[i].Y;
 
-//            //if (unwantedPointNum > 0)
-//            //{
-//            //    subUnWantedPoint( pBuffer, BuferSize );
-//            //}
+                cvdst[i].X = (int)(cvdst[i].X * ((float)Width / lClientWidth));
+                cvdst[i].Y = (int)(cvdst[i].Y * ((float)Height / lClientHeight));
 
-//            Point point = new Point();
-//            switch( m_mode )
-//            {
-//            case MODE.MODE_SET_CALIBRATION:
-//                if(g_bBeginDrawRectangle)
-//                {
-//                    if(1 == m_bRectifyState)
-//                    {	 
-//                        int ax = 0, ay = 0, nled = -10;
-//                        nled = m_nLed;
-//                        //GetPointToConvert(pBuffer, &ax, &ay, m_nLed);
-//                        //Con::printf("nled %d, m_nled %d",nled, m_nLed);
+                if( m_mode == MODE.MODE_SET_CALIBRATION )
+                {
+                    szwcKey = "DataSrc" + i;
+                    cvSrcBt[0] = (byte)((m_p4[i].X & 0xff00) >> 8);
+                    cvSrcBt[1] = (byte)((m_p4[i].X & 0x00ff) >> 0);
+                    cvSrcBt[2] = (byte)((m_p4[i].Y & 0xff00) >> 8);
+                    cvSrcBt[3] = (byte)((m_p4[i].Y & 0x00ff) >> 0);
 
-//                        m_nPointToConvert++;
-//                        //find point
-//                        if(nled != m_nLed)
-//                        {
-//                            if(m_nLed > 3)
-//                            {
-//                                m_bRectifyState = 0;
-//                            }
-//                            else
-//                            {
-//                                m_p4[3 - m_nLed].X = ax;
-//                                m_p4[3 - m_nLed].Y = ay;
-//                                m_bRectifyState = 0;
-//                            }
-//                            //添加代码,改变校准图片信息.
-//                            //Con::executef("onChangeCalibration",  Con::getIntArg(m_nLed));
-//                        }
-//                    }
-                    
-//                    if(3 == m_nLed)
-//                    {
-//                        if(_ID == 1)
-//                        {
-//                            g_bled = true; 
-//                            g_bBeginDrawRectangle = false;
-//                        }
-//                    }
-//                }
-//                //DisplayRectifyImage(pBuffer, BuferSize);
-//                m_nFirstInst = 1;
-//                break;
+                    szwcKey = "DataSrc" + i;
+                    WritePrivateProfileStruct(strTitle, szwcKey, cvSrcBt, cvSrcBt.Length, ".//Rectangle.vro");
+                }
+            }
 
-//            case MODE.MODE_MOTION:
-//                if(m_nFirstInst == 0)
-//                {
-//                    //DisplayRectifyImage(pBuffer, BuferSize);
-//                    m_nFirstInst = 1;
-//                }
-//                //Convert2GrayBitmap(pBuffer);
+            //设置透视变换类信息.
+            m_warp.setSource(cvsrc[0].X, cvsrc[0].Y,
+                cvsrc[1].X, cvsrc[1].Y,
+                cvsrc[2].X, cvsrc[2].Y,
+                cvsrc[3].X, cvsrc[3].Y);
 
-//                if(m_bCurPointModified)
-//                {
-//                    point.X = m_curMousePoint.X;
-//                    point.Y = m_curMousePoint.Y;
-//                    m_bCurPointModified = false;
+            m_warp.setDestination(cvdst[0].X, cvdst[0].Y,
+                cvdst[1].X, cvdst[1].Y,
+                cvdst[2].X, cvdst[2].Y,
+                cvdst[3].X, cvdst[3].Y);
+        }
 
-//                    //改变准星坐标.
-//                    /*if(m_funPointProc)
-//                    {
-//                        if(point.x < 1 || point.y < 1)
-//                        {
-//                            point.x = 0;
-//                            point.y = 0;
-//                        }
-//                        m_funPointProc(this->_ID, point);
-//                        //MessageBox(NULL, L"m_funPointProcid", L"OK", MB_OK);
-//                    }*/
-//                }
-//                /*else
-//                {
-//                    if(m_funPointProc)
-//                    {
-//                        point.x = -1;
-//                        point.y = -1;
-//                        m_funPointProc(this->_ID, point);
-//                    }
-//                }*/
-//                break;
-//            default:
-//                break;
-//            }
-//            return 0;
-//        }
+        unsafe void ConvertGrayBitmapFindPoint(byte* pBuffer)
+        {
+            int nMax_x = 0;
+            int nMax_y = 0;
+            float nMaxx1 = 0.0f;
+            float nMaxy1 = 0.0f;
+            byte fGray = 0;
 
-//        void DisplayRectifyImage(byte[] pBuffer, long BuferSize)
-//        {
-//            CvPoint2D32f[] cvsrc = new CvPoint2D32f[4];
-//            CvPoint2D32f[] cvdst = new CvPoint2D32f[4];
+            float ax = 0.0f;
+            float ay = 0.0f;
+            int indexVal = 0;
+            bool bIsMouseInClient = false;
+            m_nBrightDotCount = 0;
 
-//            cvdst[ 0 ].X = 0;
-//            cvdst[ 0 ].Y = 0;
-//            cvdst[ 1 ].X = lClientWidth;
-//            cvdst[ 1 ].Y = 0;
-//            cvdst[ 2 ].X = lClientWidth;
-//            cvdst[ 2 ].Y = lClientHeight;
-//            cvdst[ 3 ].X = 0;
-//            cvdst[ 3 ].Y = lClientHeight;
+            for (int y = 0; y < Height; y++)
+            {
+                for (int x = 0; x < Width * 3; x += 3)
+                {
+                    //Gray = (R*299 + G*587 + B*114 + 500) / 1000; //整数运算效率高于浮点运算.
+                    /*fGray = ( float )( 299 * pBuffer[ x + 2 + Width * 3 * y ] + 
+                            587 * pBuffer[ x + 1 + Width * 3 * y ] +				
+                            114 * pBuffer[ x + 0 + Width * 3 * y ] ) / 1000.0;*/
+                    //Gray = (R*19595 + G*38469 + B*7472) >> 16; //移位法效率更高.
+                    fGray = (byte)((pBuffer[x + 2 + Width * 3 * y] * 19595
+                                                    + pBuffer[x + 1 + Width * 3 * y] * 38469
+                                                    + pBuffer[x + 0 + Width * 3 * y] * 7472) >> 16);
 
-//            Point[] points = new Point[4];
-//            //memcpy( points, m_p4, sizeof( Point ) * 4 );
+                    if (fGray > 250)
+                    {
+                        fGray = 255;
+                        m_nBrightDotCount++;
+                        bIsMouseInClient = true;
+                    }
+                    else
+                    {
+                        fGray = 0;
+                    }
 
-//            //for( int i = 0; i < 4; i++ )
-//            //{
-//            //    cvsrc[ i ].x = m_p4[ i ].X;
-//            //    cvsrc[ i ].y = m_p4[ i ].Y;
+                    GrayValues[indexVal] = fGray;
+                    indexVal++;
+                }
+            }
 
-//            //    cvdst[ i ].x = cvdst[ i ].x * ( ( float )Width / lClientWidth); 
-//            //    cvdst[ i ].y = cvdst[ i ].y * ( ( float )Height / lClientHeight);
+            indexVal = 0;
+            for (int j = 0; j < Height; j++)
+            {
+                for (int i = 0; i < Width; i++)
+                {
+                    if (GrayValues[indexVal] > 0)
+                    {
+                        ax += i;
+                        ay += j;
+                    }
+                    indexVal++;
+                }
+            }
 
-//            //    if( m_mode == MODE_SET_CALIBRATION )
-//            //    {
-//            //        WCHAR szwcKey[ 50 ], strTitle[50];
-//            //        swprintf( szwcKey, sizeof( szwcKey ), L"DataSrc%d", i );
-//            //        swprintf(strTitle, sizeof(strTitle), L"Camera%d", _ID);
-//            //        WritePrivateProfileStruct(strTitle, szwcKey, &cvsrc[ i ],
-//            //                sizeof( CvPoint2D32f ), L".//Rectangle.vro" );
-//            //        swprintf( szwcKey, sizeof( szwcKey ), L"DataDst%d", i );
-//            //        WritePrivateProfileStruct(strTitle, szwcKey, &cvdst[ i ],
-//            //                sizeof( CvPoint2D32f ), L".//Rectangle.vro" );
-//            //    }
-//            //}
+            nMaxx1 = ax;
+            nMaxy1 = ay;
 
-//            m_warp.setSource( cvsrc[ 0 ].X, cvsrc[ 0 ].Y, 
-//                cvsrc[ 1 ].X, cvsrc[ 1 ].Y,
-//                cvsrc[ 2 ].X, cvsrc[ 2 ].Y, 
-//                cvsrc[ 3 ].X, cvsrc[ 3 ].Y);
+            float nx = 0.0f;
+            float ny = 0.0f;
+            m_warp.warp(nMaxx1, nMaxy1, nx, ny);
 
-//            m_warp.setDestination( cvdst[ 0 ].X, cvdst[ 0 ].Y, 
-//                cvdst[ 1 ].X, cvdst[ 1 ].Y,
-//                cvdst[ 2 ].X, cvdst[ 2 ].Y, 
-//                cvdst[ 3 ].X, cvdst[ 3 ].Y);
-//        }
+            nMaxx1 = nx;
+            nMaxy1 = ny;
+            //坐标平滑处理.
+            //PointF pointVal = Exponentialsmoothing(nMaxx1, nMaxy1);
+            //nMaxx1 = pointVal.X;
+            //nMaxy1 = pointVal.Y;
 
-//        void Convert2GrayBitmap( byte[] pBuffer )
-//        {
-//            int nMax_x = 0;
-//            int nMax_y = 0;
-//            float nMaxx1 = 0.0f;
-//            float nMaxy1 = 0.0f;
-//            float fGray = 0.0f;
+            if (m_nBrightDotCount > 0)
+            {
+                Rectangle rc = new Rectangle();
+                GetWindowRect(GetDesktopWindow(), ref rc);
 
-//            float ax = 0.0f;
-//            float b = 0.0f;
-//            float ay = 0.0f;
-//            float X = 0.0f;
-//            float Y = 0.0f;
-//            bool bIsMouseInClient = false;
-//            m_nBrightDotCount = 0;
+                nMax_x = (int)(((float)Math.Abs(rc.Right - rc.Left) / (float)Width) * nMaxx1);
+                nMax_y = (int)(((float)Math.Abs(rc.Bottom - rc.Top) / (float)Height) * nMaxy1);
 
-//            //for( int y = 0; y < Height; y++ )
-//            //{
-//            //    for( int x = 0; x < Width * 3; x += 3 )
-//            //    {
-//            //        //Gray = (R*299 + G*587 + B*114 + 500) / 1000; //整数运算效率高于浮点运算.
-//            //        /*fGray = ( float )( 299 * pBuffer[ x + 2 + Width * 3 * y ] + 
-//            //                587 * pBuffer[ x + 1 + Width * 3 * y ] +				
-//            //                114 * pBuffer[ x + 0 + Width * 3 * y ] ) / 1000.0;*/
-//            //        //Gray = (R*19595 + G*38469 + B*7472) >> 16; //移位法效率更高.
-//            //        fGray = (float)((pBuffer[ x + 2 + Width * 3 * y ] * 19595
-//            //                                        + pBuffer[ x + 1 + Width * 3 * y ] * 38469
-//            //                                        + pBuffer[ x + 0 + Width * 3 * y ] * 7472) >> 16);
+                int d1 = (int)Math.Abs(m_curMousePoint.X - (int)nMax_x);
+                if (d1 > m_nMoveRadius)
+                {
+                    m_curMousePoint.X = nMax_x;
+                    m_bCurPointModified = true;
+                }
 
-//            //        if( fGray > 250 ) 
-//            //        {									
-//            //            fGray = 255;			
-//            //            m_nBrightDotCount++;	
-//            //            bIsMouseInClient = true;
-//            //        }
-//            //        else
-//            //        {
-//            //            fGray = 0;
-//            //        }
-//            //        (image->imageData + image->widthStep * y)[ x / 3] = fGray;
-//            //    }
-//            //}
+                int d2 = (int)Math.Abs(m_curMousePoint.Y - (int)nMax_y);
+                if (d2 > m_nMoveRadius)
+                {
+                    m_curMousePoint.Y = nMax_y;
+                    m_bCurPointModified = true;
+                }
+            }
 
-//            //for( int j = 0; j < image.Height; j++ )
-//            //{
-//            //    for( int i = 0; i < image.WidthStep; i++ )
-//            //    {
-//            //        if ((byte)((image.ImageData + image.WidthStep * j)[i]) > 0)
-//            //        {
-//            //            ax += (byte)((image.ImageData + image.WidthStep * j)[i]) * (i);
-//            //            ay += (byte)((image.ImageData + image.WidthStep * j)[i]) * (j);
-//            //            b += (byte)((image.ImageData + image.WidthStep * j)[i]);
-//            //        }
-//            //    }
-//            //}
+            if (!bIsMouseInClient)
+            {
+                m_curMousePoint.X = -1;
+                m_curMousePoint.Y = -1;
+            }
+        }
 
-//            if( b != 0 )
-//            {
-//                X = ax / b;
-//                Y = ay / b;
-//            }
-//            nMaxx1 = X;
-//            nMaxy1 = Y;
+        unsafe Point GetPointToConvert(byte* pBuffer)
+        {
+            byte fGray = 0;
+            byte GrayThreshold = 250;
+            Point pointVal = Point.Empty;
+            for (int y = 0; y < Height; y++)
+            {
+                for (int x = 0; x < Width * 3; x += 3)
+                {
+                    //Gray = (R*299 + G*587 + B*114 + 500) / 1000; //整数运算效率高于浮点运算.
+                    /*fGray = ( float )( 299 * pBuffer[ x + 2 + Width * 3 * y ] + 
+                            587 * pBuffer[ x + 1 + Width * 3 * y ] +				
+                            114 * pBuffer[ x + 0 + Width * 3 * y ] ) / 1000.0;*/
+                    //Gray = (R*19595 + G*38469 + B*7472) >> 16; //移位法效率更高.
+                    fGray = (byte)((pBuffer[x + 2 + Width * 3 * y] * 19595
+                                                    + pBuffer[x + 1 + Width * 3 * y] * 38469
+                                                    + pBuffer[x + 0 + Width * 3 * y] * 7472) >> 16);
+                    //找到激光器亮点.
+                    if (fGray > GrayThreshold)
+                    {
+                        pointVal.X = x / 3;
+                        pointVal.Y = y;
+                        m_nLed++;
+                        break;
+                    }
+                }
+            }
+            return pointVal;
+        }
 
-//            float nx = 0.0f;
-//            float ny = 0.0f;
-//            m_warp.warp(nMaxx1, nMaxy1, nx, ny);
+        void ResetSmoothing()
+        {
+            m_nSmoothingCount = 0;
+            m_fMark = 0.05f;
+            m_fExsmothX = 0.0f;
+            m_fExsmothY = 0.0f;
+        }
 
-//            nMaxx1 = nx;
-//            nMaxy1 = ny;
-//            Exponentialsmoothing(nMaxx1, nMaxy1);
+        PointF Exponentialsmoothing(float warpedX, float warpedY)
+        {
+            PointF pointVal = PointF.Empty;
+            if (m_nSmoothingCount == 0)
+            {
+                m_fExsmothX = warpedX;
+                m_fExsmothY = warpedY;
+                m_nSmoothingCount = 1;
+            }
+            else
+            {
+                m_fExsmothX = m_fMark * warpedX + (1 - m_fMark) * m_fExsmothX;
+                m_fExsmothY = m_fMark * warpedY + (1 - m_fMark) * m_fExsmothY;
+            }
+            warpedX = m_fExsmothX;
+            warpedY = m_fExsmothY;
 
-//            //if(m_nBrightDotCount > 0)
-//            //{
-//            //    CvRect rc;
-//            //    IntPtr hWnd = GetDesktopWindow();
-//            //    GetWindowRect(hWnd, ref rc);
-
-//            //    nMax_x = (int)( ( ( float )Math.Abs( rc.Right - rc.Left ) / (float)Width ) * nMaxx1 );
-//            //    nMax_y = (int)( ( ( float )Math.Abs( rc.Bottom - rc.Top ) / (float)Height ) * nMaxy1 );
-
-//            //    int d1 =  (int)Math.Abs(m_curMousePoint.X - (int)nMax_x );
-//            //    if(d1 > m_nMoveRadius)
-//            //    {
-//            //        m_curMousePoint.X = nMax_x;
-//            //        m_bCurPointModified = true;
-//            //    }
-
-//            //    int d2 = (int)Math.Abs(m_curMousePoint.Y  - (int)nMax_y);
-//            //    if(d2 > m_nMoveRadius)
-//            //    {
-//            //        m_curMousePoint.Y = nMax_y;
-//            //        m_bCurPointModified = true;
-//            //    }
-//            //}
-
-//            if( !bIsMouseInClient )
-//            {
-//                m_curMousePoint.X = -1;
-//                m_curMousePoint.Y = -1;
-//            }
-//        }
-
-////STDMETHODIMP_(ULONG) CSampleGrabberCB::Release()
-////{
-////    cvReleaseImage(&image);
-
-////    if(m_translate)
-////    {
-////        cvReleaseMat( &m_translate );
-////        m_translate = NULL;
-////    }
-////    return 1;
-////}
-
-//        int GetPointToConvert( byte[] pBuffer, int nAxle_x, int nAxle_y, int id_led)
-//        {
-//            int nx = 0;
-//            int ny = 0;
-//            float fGray = 0.0f;
-//            bool bIsMouseInClient = false;
-//            m_nBrightDotCount = 0;
-//            int GrayThreshold;
-
-//            if(_ID == 1)
-//            {
-//                GrayThreshold = 250;
-//            }
-//            else
-//            {
-//                GrayThreshold = 250;
-//            }
-
-//            for( int y = 0; y < Height; y++ )
-//            {
-//                for( int x = 0; x < Width * 3; x += 3 )
-//                {
-//                    //Gray = (R*299 + G*587 + B*114 + 500) / 1000; //整数运算效率高于浮点运算.
-//                    /*fGray = ( float )( 299 * pBuffer[ x + 2 + Width * 3 * y ] + 
-//                            587 * pBuffer[ x + 1 + Width * 3 * y ] +				
-//                            114 * pBuffer[ x + 0 + Width * 3 * y ] ) / 1000.0;*/
-//                    //Gray = (R*19595 + G*38469 + B*7472) >> 16; //移位法效率更高.
-//                    fGray = (float)((pBuffer[ x + 2 + Width * 3 * y ] * 19595
-//                                                    + pBuffer[ x + 1 + Width * 3 * y ] * 38469
-//                                                    + pBuffer[ x + 0 + Width * 3 * y ] * 7472) >> 16);
-        			
-//                    if( fGray >  GrayThreshold) 
-//                    {
-//                        nx = x / 3;
-//                        ny = y;
-//                        bIsMouseInClient = true;
-//                        m_nBrightDotCount++;	
-//                        break;
-//                    }
-//                }
-//            }
-
-//            if(bIsMouseInClient)
-//            {
-//                nAxle_x = nx;
-//                nAxle_y = ny;
-//                m_nLed++;
-//                m_ncount++;
-//            }
-//            return 1;
-//        }
-
-//        void ResetSmoothing() 
-//        {
-//            m_bSmoothState = false;
-//            m_nSmoothingCount = 0;
-//            m_fMark = 0.05f;
-//            m_fExsmothX = 0.0f;
-//            m_fExsmothY = 0.0f;
-//        }
-
-//        void Exponentialsmoothing(float warpedX, float warpedY)
-//        {
-//            if(m_nSmoothingCount == 0)
-//            {
-//                m_fExsmothX = warpedX;
-//                m_fExsmothY = warpedY;
-//                m_nSmoothingCount = 1;
-//            }
-//            else
-//            {
-//                m_fExsmothX = m_fMark * warpedX + (1 - m_fMark) * m_fExsmothX;
-//                m_fExsmothY = m_fMark * warpedY + (1 - m_fMark) * m_fExsmothY;
-//            }
-//            warpedX = m_fExsmothX;
-//            warpedY = m_fExsmothY;
-//        }
+            pointVal.X = warpedX;
+            pointVal.Y = warpedY;
+            return pointVal;
+        }
+        #endregion
     }
 }

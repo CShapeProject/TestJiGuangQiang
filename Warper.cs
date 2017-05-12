@@ -5,12 +5,6 @@ using System.Text;
 
 namespace OpenCameraCSByOpenCV
 {
-    public enum MODE
-    {
-        MODE_SET_CALIBRATION,
-        MODE_MOTION,
-    };
-
     //透视变换类，此类来源于WiiMode
     class Warper
     {
@@ -23,7 +17,7 @@ namespace OpenCameraCSByOpenCV
 	    float[] warpMat = new float[16];
 	    bool dirty;
         
-	    Warper()
+	    public Warper()
 	    {
 		    setIdentity();
 	    }
@@ -80,7 +74,6 @@ namespace OpenCameraCSByOpenCV
 			    dstY[3] = y3;
 			    dirty = true;
 	    }
-
 
 	    void computeWarp() {
 		    computeQuadToSquare(	srcX[0],srcY[0],
