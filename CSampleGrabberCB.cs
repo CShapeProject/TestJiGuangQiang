@@ -1,4 +1,5 @@
-﻿using System;
+﻿//#define CHECK_CAMERA_ZHENLV
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -222,17 +223,6 @@ namespace OpenCameraCSByOpenCV
             GrayValues = new byte[Width * Height];
             unwantedPoint = new Point[Width * Height];
 
-            //CvSize size = new CvSize(Width, Height);
-            //IplImage img1 = new IplImage(size, BitDepth.U8, 1); 
-            //IplImage imgTmp = new IplImage(Cv.Size(Width, Height), BitDepth.U8, 1);
-            //image = new IplImage(Width, Height, BitDepth.U8, 1);
-            //image.InitImageHeader(Cv.Size(Width, Height), BitDepth.U8, 1, ImageOrigin.BottomLeft);
-            //image = IplImage.InitImageHeader(Cv.Size(Width, Height), BitDepth.U8, 1, ImageOrigin.BottomLeft);
-            //image = Cv.CreateImage(Cv.Size(Width, Height), BitDepth.U8, 1);
-            //Cv.InitImageHeader(out IplImage image, CvSize size, BitDepth depth, int channels, ImageOrigin origin);
-            //image.Origin = ImageOrigin.BottomLeft;
-            //Cv.InitImageHeader(out image, Cv.Size(Width, Height), BitDepth.U8, 1, ImageOrigin.BottomLeft);
-
             DsUtils.FreeAMMediaType(media);
             media = null;
         }
@@ -282,12 +272,6 @@ namespace OpenCameraCSByOpenCV
                 Marshal.ReleaseComObject(m_FilterGraph);
                 m_FilterGraph = null;
             }
-
-            //if (image != null)
-            //{
-            //    Cv.ReleaseImage(image);
-            //    image = null;
-            //}
             GC.Collect();
         }
 
@@ -298,13 +282,19 @@ namespace OpenCameraCSByOpenCV
             return 0;
         }
 
+#if CHECK_CAMERA_ZHENLV
         double LastTimeVal = 0;
+#endif
         /// <summary> buffer callback, COULD BE FROM FOREIGN THREAD. </summary>
         unsafe int ISampleGrabberCB.BufferCB(double sampleTime, IntPtr pBuffer, int bufferLen)
         {
+#if CHECK_CAMERA_ZHENLV
+            //检测采集器的刷新帧率信息.
             double dTime = sampleTime - LastTimeVal;
             LastTimeVal = sampleTime;
-            Console.WriteLine("dTime " + dTime);
+            int camZhenLv = (int)(1000 / (dTime * 1000));
+            Console.WriteLine("dTime " + dTime.ToString("f6") + ", camZhenLv " + camZhenLv);
+#endif
 
             CheckBufferCB(pBuffer, bufferLen);
             return 0;
@@ -344,7 +334,7 @@ namespace OpenCameraCSByOpenCV
         bool m_bCurPointModified;
 
         //76800 = 320 * 240; -> 采集器像素的宽*高.
-        Point[] unwantedPoint;
+        Point[] unwantedPoint; //干扰光源坐标信息.
         long unwantedPointNum;
         int getFrameNum;
 
@@ -497,12 +487,19 @@ namespace OpenCameraCSByOpenCV
 
         unsafe int CheckBufferCB(IntPtr pBuffer, int bufferLen)
         {
-            getFrameNum++;
-            if (getFrameNum == 9000)
+            if (m_mode == MODE.MODE_MOTION)
             {
-                getUnwantedPoint((byte*)pBuffer);
-                getFrameNum = 0;
-                return 0;
+                if (getFrameNum >= 625)
+                {
+                    getFrameNum = 0;
+                }
+
+                //625 = 10000 / (1000 / 60); -> 每隔10秒获取一次干扰光源信息,60是采集器的刷新帧率.
+                if (getFrameNum % 625 == 0)
+                {
+                    getUnwantedPoint((byte*)pBuffer);
+                }
+                getFrameNum++;
             }
 
             if (unwantedPointNum > 0)
