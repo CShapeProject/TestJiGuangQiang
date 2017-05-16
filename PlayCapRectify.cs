@@ -4,7 +4,6 @@ using System.Linq;
 using System.Text;
 using System.Runtime.InteropServices;
 using DirectShowLib;
-using OpenCvSharp;
 using System.Windows.Forms;
 using System.Runtime.InteropServices.ComTypes;
 
