@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Drawing;
 
 namespace OpenCameraCSByOpenCV
 {
@@ -116,8 +117,14 @@ namespace OpenCameraCSByOpenCV
 			    float dx2 = x3 - x2, 	dy2 = y3 - y2;
 			    float sx = x0 - x1 + x2 - x3;
 			    float sy = y0 - y1 + y2 - y3;
-			    float g = (sx * dy2 - dx2 * sy) / (dx1 * dy2 - dx2 * dy1);
-			    float h = (dx1 * sy - sx * dy1) / (dx1 * dy2 - dx2 * dy1);
+                float rv1 = (dx1 * dy2 - dx2 * dy1);
+                float rv2 = (dx1 * dy2 - dx2 * dy1);
+                rv1 = rv1 == 0 ? 1 : rv1; //防止出现分母为零.
+                rv2 = rv2 == 0 ? 1 : rv2;
+                //float g = (sx * dy2 - dx2 * sy) / (dx1 * dy2 - dx2 * dy1);
+                //float h = (dx1 * sy - sx * dy1) / (dx1 * dy2 - dx2 * dy1);
+                float g = (sx * dy2 - dx2 * sy) / rv1;
+                float h = (dx1 * sy - sx * dy1) / rv2;
 			    float a = x1 - x0 + g * x1;
 			    float b = x3 - x0 + h * x3;
 			    float c = x0;
@@ -161,8 +168,12 @@ namespace OpenCameraCSByOpenCV
 			    // Probably unnecessary since 'I' is also scaled by the determinant,
 			    //   and 'I' scales the homogeneous coordinate, which, in turn,
 			    //   scales the X,Y coordinates.
-			    // Determinant  =   a * (e - f * h) + b * (f * g - d) + c * (d * h - e * g);
-			    float idet = 1.0f / (a * A           + b * D           + c * G);
+                // Determinant  =   a * (e - f * h) + b * (f * g - d) + c * (d * h - e * g);
+               
+                // float idet = 1.0f / (a * A + b * D + c * G);
+                float rv = (a * A + b * D + c * G);
+                rv = rv == 0 ? 1 : rv; //防止出现分母为零.
+                float idet = 1.0f / rv;
 
 			    mat[ 0] = A * idet;	mat[ 1] = D * idet;	mat[ 2] = 0;	mat[ 3] = G * idet;
 			    mat[ 4] = B * idet;	mat[ 5] = E * idet;	mat[ 6] = 0;	mat[ 7] = H * idet;
@@ -175,22 +186,32 @@ namespace OpenCameraCSByOpenCV
 		    return warpMat;
 	    }
 
-	    public void warp(float srcX, float srcY, float dstX, float dstY)
+	    public PointF warp(float srcX, float srcY)
 	    {
-		    if (dirty)
-			    computeWarp();
-		    warp(warpMat, srcX, srcY, dstX, dstY);
+            PointF pointVal = PointF.Empty;
+            if (dirty)
+            {
+                computeWarp();
+            }
+            pointVal = warp(warpMat, srcX, srcY);
+            return pointVal;
 	    }
 
-	    static void warp(float[] mat, float srcX, float srcY, float dstX, float dstY){
+        static PointF warp(float[] mat, float srcX, float srcY)
+        {
+            PointF pointVal = PointF.Empty;
 		    float[] result = new float[4];
 		    float z = 0;
 		    result[0] = (float)(srcX * mat[0] + srcY*mat[4] + z*mat[8] + 1*mat[12]);
 		    result[1] = (float)(srcX * mat[1] + srcY*mat[5] + z*mat[9] + 1*mat[13]);
 		    result[2] = (float)(srcX * mat[2] + srcY*mat[6] + z*mat[10] + 1*mat[14]);
 		    result[3] = (float)(srcX * mat[3] + srcY*mat[7] + z*mat[11] + 1*mat[15]);        
-		    dstX = result[0]/result[3];
-		    dstY = result[1]/result[3];
+            //dstX = result[0]/result[3];
+            //dstY = result[1]/result[3];
+            result[3] = result[3] == 0 ? 1 : result[3]; //防止出现分母为零.
+            pointVal.X = result[0] / result[3];
+            pointVal.Y = result[1] / result[3];
+            return pointVal;
 	    }
     }
 }
