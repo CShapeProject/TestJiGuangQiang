@@ -304,8 +304,8 @@ namespace OpenCameraCSByOpenCV
         #region Find Player Cross Point
         int m_nMoveRadius;
         //采集器输出图像的大小信息.
-        public int Width;
-        public int Height;
+        int Width;
+        int Height;
 
         //显示器的大小信息.
         int lClientWidth;
@@ -317,13 +317,13 @@ namespace OpenCameraCSByOpenCV
         float m_fMark;
         float m_fExsmothX, m_fExsmothY;
 
-        public MODE m_mode;
+        MODE m_mode;
         //激光器枪在显示器上投射的坐标信息.
         Point m_curMousePoint;
         //存储显示器四个角在采集器图像里的坐标信息.
         Point[] m_p4 = new Point[4];
 
-        public Warper m_warp;
+        Warper m_warp;
         bool g_bBeginDrawRectangle;
         bool m_bFirstInst;
 
@@ -502,16 +502,17 @@ namespace OpenCameraCSByOpenCV
         //接收校准按键消息,打开查找光点开关.
         public void ActiveJiaoZhunZuoBiao()
         {
-            if (m_mode == MODE.MODE_SET_CALIBRATION)
+            if (m_mode != MODE.MODE_SET_CALIBRATION)
             {
                 return;
             }
             m_bRectifyState = true;
         }
 
-        void CallGameChangeJiaoZhunPic(byte indexVal)
+        void CallGameChangeJiaoZhunPic()
         {
             //通知游戏更新校准图片信息.
+            Form1.Instance.ChangeJiaoZhunPic((byte)(m_nLed + 1));
         }
 
         void OpenPlayerJiGuangQi()
@@ -522,6 +523,7 @@ namespace OpenCameraCSByOpenCV
         void CallGameUpdateZhunXingZuoBiao(Point pointVal)
         {
             //通知游戏更新准星坐标信息.
+            Form1.Instance.UpdateZhunXingZuoBiao(pointVal);
         }
 
         void UpdateCameraBfferCB(double timeVal)
@@ -537,6 +539,7 @@ namespace OpenCameraCSByOpenCV
 
         unsafe void CheckBufferCB(IntPtr pBuffer, int bufferLen)
         {
+            //CallGameUpdateZhunXingZuoBiao(new Point(getFrameNum, getFrameNum + 2)); //test.
             if (m_mode == MODE.MODE_MOTION)
             {
                 if (getFrameNum >= 625)
@@ -585,16 +588,16 @@ namespace OpenCameraCSByOpenCV
                                 m_p4[4 - m_nLed].Y = pointVal.Y;
                                 m_bRectifyState = false;
                                 //添加代码,改变校准图片信息.
-                                CallGameChangeJiaoZhunPic(m_nLed);
+                                CallGameChangeJiaoZhunPic();
                             }
                         }
 
                         //光枪校准已经完成.
                         if (4 == m_nLed)
                         {
-                            m_mode = MODE.MODE_MOTION;
-                            g_bBeginDrawRectangle = false;
                             SetCalibrationInfo();
+                            g_bBeginDrawRectangle = false;
+                            m_mode = MODE.MODE_MOTION;
                         }
                     }
                     break;
@@ -644,6 +647,16 @@ namespace OpenCameraCSByOpenCV
             cvdst[3].X = 0;
             cvdst[3].Y = lClientHeight;
 
+            //test.
+            //m_p4[0].X = 0;
+            //m_p4[0].Y = 62;
+            //m_p4[1].X = 285;
+            //m_p4[1].Y = 56;
+            //m_p4[2].X = 266;
+            //m_p4[2].Y = 165;
+            //m_p4[3].X = 33;
+            //m_p4[3].Y = 180;
+            //test.
             for( int i = 0; i < 4; i++ )
             {
                 cvsrc[i].X = m_p4[i].X;
@@ -687,6 +700,7 @@ namespace OpenCameraCSByOpenCV
 
             float ax = 0.0f;
             float ay = 0.0f;
+            float b = 0.0f;
             int indexVal = 0;
             bool bIsMouseInClient = false;
 
@@ -718,6 +732,11 @@ namespace OpenCameraCSByOpenCV
                 }
             }
 
+            if (!bIsMouseInClient)
+            {
+                return;
+            }
+
             indexVal = 0;
             for (int j = 0; j < Height; j++)
             {
@@ -725,22 +744,27 @@ namespace OpenCameraCSByOpenCV
                 {
                     if (GrayValues[indexVal] > 0)
                     {
-                        ax += i;
-                        ay += j;
+                        //这里是重点,暂时不知道为什么要这样计算.
+                        ax += GrayValues[indexVal] * i;
+                        ay += GrayValues[indexVal] * j;
+                        b += GrayValues[indexVal];
                     }
                     indexVal++;
                 }
             }
 
+            if (b != 0)
+            {
+                ax = ax / b;
+                ay = ay / b;
+            }
             nMaxx1 = ax;
             nMaxy1 = ay;
 
-            float nx = 0.0f;
-            float ny = 0.0f;
-            m_warp.warp(nMaxx1, nMaxy1, nx, ny);
-
-            nMaxx1 = nx;
-            nMaxy1 = ny;
+            //重点,透视变换类.
+            PointF pointNV = m_warp.warp(nMaxx1, nMaxy1);
+            nMaxx1 = pointNV.X;
+            nMaxy1 = pointNV.Y;
             //坐标平滑处理.
             //PointF pointVal = Exponentialsmoothing(nMaxx1, nMaxy1);
             //nMaxx1 = pointVal.X;
@@ -777,6 +801,7 @@ namespace OpenCameraCSByOpenCV
         {
             byte fGray = 0;
             byte GrayThreshold = 250;
+            bool isStopCheck = false;
             Point pointVal = Point.Empty;
             for (int y = 0; y < Height; y++)
             {
@@ -791,13 +816,20 @@ namespace OpenCameraCSByOpenCV
                                                     + pBuffer[x + 1 + Width * 3 * y] * 38469
                                                     + pBuffer[x + 0 + Width * 3 * y] * 7472) >> 16);
                     //找到激光器亮点.
-                    if (fGray > GrayThreshold)
+                    //if (fGray > GrayThreshold)
+                    if (fGray > GrayThreshold || fGray > 0) //test
                     {
+                        isStopCheck = true;
                         pointVal.X = x / 3;
                         pointVal.Y = y;
                         m_nLed++;
                         break;
                     }
+                }
+
+                if (isStopCheck)
+                {
+                    break;
                 }
             }
             return pointVal;
