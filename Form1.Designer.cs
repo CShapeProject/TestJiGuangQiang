@@ -49,9 +49,9 @@
             this.ZhunXingZB.Font = new System.Drawing.Font("宋体", 35F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.ZhunXingZB.Location = new System.Drawing.Point(67, 59);
             this.ZhunXingZB.Name = "ZhunXingZB";
-            this.ZhunXingZB.Size = new System.Drawing.Size(500, 50);
+            this.ZhunXingZB.Size = new System.Drawing.Size(795, 50);
             this.ZhunXingZB.TabIndex = 1;
-            this.ZhunXingZB.Text = "px: 1360 py: 768";
+            this.ZhunXingZB.Text = "px: 1360 py: 768 fpsCam: 30";
             // 
             // ZhunXingP1
             // 

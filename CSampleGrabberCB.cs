@@ -1,4 +1,5 @@
-﻿//#define CHECK_CAMERA_ZHENLV
+﻿#define CHECK_CAMERA_ZHENLV
+//#define CHECK_CAMERA_ID
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -50,10 +51,12 @@ namespace OpenCameraCSByOpenCV
             }
             m_CamID = iDeviceNum;
 
+#if CHECK_CAMERA_ID
             if (!CheckCameraIdInfo(capDevices[iDeviceNum]))
             {
                 return;
             }
+#endif
 
             try
             {
@@ -282,6 +285,7 @@ namespace OpenCameraCSByOpenCV
             return 0;
         }
 
+        public static int CamZhenLvVal = 30;
 #if CHECK_CAMERA_ZHENLV
         double LastTimeVal = 0;
 #endif
@@ -292,8 +296,8 @@ namespace OpenCameraCSByOpenCV
             //检测采集器的刷新帧率信息.
             double dTime = sampleTime - LastTimeVal;
             LastTimeVal = sampleTime;
-            int camZhenLv = (int)(1000 / (dTime * 1000));
-            Console.WriteLine("dTime " + dTime.ToString("f6") + ", camZhenLv " + camZhenLv);
+            CamZhenLvVal = (int)(1 / dTime);
+            //Console.WriteLine("dTime " + dTime.ToString("f6") + ", camZhenLv " + CamZhenLvVal);
 #endif
 
             UpdateCameraBfferCB(sampleTime);

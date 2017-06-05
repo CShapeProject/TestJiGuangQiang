@@ -7,4 +7,5 @@
 *.user
 *.sln
 *.suo
+*.txt
 OpenCameraCtrl.cs

@@ -141,7 +141,9 @@ namespace OpenCameraCSByOpenCV
                 {
                     break;
                 }
-                ZhunXingZB.Text = "px: " + ZhunXingPoint.X.ToString("d4") + " py: " + ZhunXingPoint.Y.ToString("d3");
+                ZhunXingZB.Text = "px: " + ZhunXingPoint.X.ToString("d4") +
+                                    " py: " + ZhunXingPoint.Y.ToString("d3") +
+                                    " fpsCam: " + CSampleGrabberCB.CamZhenLvVal.ToString("d3");
                 ZhunXingP1.Location = new Point(ZhunXingPoint.X, ZhunXingPoint.Y);
                 Thread.Sleep(10);
             } while (!IsExitApp);
