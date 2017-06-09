@@ -287,17 +287,30 @@ namespace OpenCameraCSByOpenCV
 
         public static int CamZhenLvVal = 30;
 #if CHECK_CAMERA_ZHENLV
-        double LastTimeVal = 0;
+        long LastTimeVal = 0;
+        int FramNum = 0;
 #endif
         /// <summary> buffer callback, COULD BE FROM FOREIGN THREAD. </summary>
         unsafe int ISampleGrabberCB.BufferCB(double sampleTime, IntPtr pBuffer, int bufferLen)
         {
 #if CHECK_CAMERA_ZHENLV
             //检测采集器的刷新帧率信息.
-            double dTime = sampleTime - LastTimeVal;
-            LastTimeVal = sampleTime;
-            CamZhenLvVal = (int)(1 / dTime);
-            //Console.WriteLine("dTime " + dTime.ToString("f6") + ", camZhenLv " + CamZhenLvVal);
+            DateTime startTime = TimeZone.CurrentTimeZone.ToLocalTime(new System.DateTime(1970, 1, 1, 0, 0, 0, 0));
+            DateTime nowTime = DateTime.Now;
+            long unixTime = (long)Math.Round((nowTime - startTime).TotalMilliseconds, MidpointRounding.AwayFromZero);
+            if (LastTimeVal == 0) {
+                LastTimeVal = unixTime;
+            }
+            else {
+                FramNum++;
+                long dTimeVal = unixTime - LastTimeVal;
+                if (dTimeVal >= 1000) {
+                    CamZhenLvVal = FramNum;
+                    FramNum = 0;
+                    LastTimeVal = unixTime;
+                    //Console.WriteLine("dTime " + unixTime + ", camZhenLv " + CamZhenLvVal);
+                }
+            }
 #endif
 
             UpdateCameraBfferCB(sampleTime);
@@ -356,6 +369,13 @@ namespace OpenCameraCSByOpenCV
         private static extern int GetPrivateProfileStruct(string lpszSections,
             string lpszKey, byte[] lpStruct, int uSizeStruct, string szFile);
 
+        [DllImport("kernel32")]
+        private static extern int GetPrivateProfileInt(string lpAppName,
+            string lpKeyName, int nDefault, string lpFileName);
+        [DllImport("kernel32")]
+        private static extern bool WritePrivateProfileString(string lpAppName,
+            string lpKeyName, string lpString, string lpFileName);
+
         [DllImport("user32")]
         static extern bool GetWindowRect(IntPtr hWnd, ref Rectangle rect);
         [DllImport("user32")]
@@ -363,9 +383,42 @@ namespace OpenCameraCSByOpenCV
         [DllImport("user32")]
         static extern int GetSystemMetrics(int nIndex);
         #endregion API函数声明结束.
+        
+        string FFileName = "test.ini";
+        /// <summary>
+        /// 读出INI文件(int)
+        /// </summary>
+        /// <param name="Section">项目名称(如 [TypeName] )</param>
+        /// <param name="Key">键</param>
+        public int ReadInt(string section, string key, int def)
+        {
+            return GetPrivateProfileInt(section, key, def, FFileName);
+        }
+        
+        /// <summary>
+        /// 写入INI文件(int)
+        /// </summary>
+        /// <param name="Section">项目名称(如 [TypeName] )</param>
+        /// <param name="Key">键</param>
+        /// <param name="Value">值</param>
+        public void WriteInt(string section, string key, int iVal)
+        {
+            WritePrivateProfileString(section, key, iVal.ToString(), FFileName);
+        }
 
         void InitFindPlayerPoint()
         {
+            FFileName = Application.StartupPath + "\\test.ini";
+            int rv = ReadInt("TestSec", "GrayVal", -1);
+            if (rv < 0 || rv > 255)
+            {
+                GrayThreshold = 125;
+                WriteInt("TestSec", "GrayVal", GrayThreshold);
+            }
+            else {
+                GrayThreshold = (byte)rv;
+            }
+
             Width = 0;
             Height = 0;
             lClientWidth = GetSystemMetrics(SM_CXSCREEN);
@@ -721,7 +774,7 @@ namespace OpenCameraCSByOpenCV
                                                     + pBuffer[x + 1 + Width * 3 * y] * 38469
                                                     + pBuffer[x + 0 + Width * 3 * y] * 7472) >> 16);
 
-                    if (fGray > 250)
+                    if (fGray > GrayThreshold)
                     {
                         fGray = 255;
                         bIsMouseInClient = true;
@@ -801,10 +854,10 @@ namespace OpenCameraCSByOpenCV
             //}
         }
 
+        byte GrayThreshold = 120;
         unsafe Point GetPointToConvert(byte* pBuffer)
         {
             byte fGray = 0;
-            byte GrayThreshold = 250;
             bool isStopCheck = false;
             Point pointVal = Point.Empty;
             for (int y = 0; y < Height; y++)
@@ -820,8 +873,8 @@ namespace OpenCameraCSByOpenCV
                                                     + pBuffer[x + 1 + Width * 3 * y] * 38469
                                                     + pBuffer[x + 0 + Width * 3 * y] * 7472) >> 16);
                     //找到激光器亮点.
-                    //if (fGray > GrayThreshold)
-                    if (fGray > GrayThreshold || fGray > 0) //test
+                    if (fGray > GrayThreshold)
+                    //if (fGray > GrayThreshold || fGray > 0) //test
                     {
                         isStopCheck = true;
                         pointVal.X = x / 3;
